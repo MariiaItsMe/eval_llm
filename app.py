@@ -101,6 +101,15 @@ async def evaluate_conversation(conversation_sample: MultiTurnSample, llm: Ollam
         return 0.0
 
 
+def create_structured_prompt(question: str) -> str:
+    """
+    Create a structured prompt that encourages concise, focused answers
+    """
+    return f"""Please provide a brief, scientific explanation in 1-2 sentences. Focus only on the core mechanism. Do not include additional details or examples.
+
+Question: {question}"""
+
+
 async def main():
     # Initialize the Ollama LLM
     llm = OllamaLLM()
@@ -110,10 +119,14 @@ async def main():
     reference = "The sky appears blue due to Rayleigh scattering of sunlight in the atmosphere. Shorter wavelengths (blue) are scattered more than longer wavelengths."
 
     try:
-        # Get response from Ollama
+        # Get response from Ollama using structured prompt
+        structured_prompt = create_structured_prompt(question)
         response = llm.client.chat(
             model="llama3.1",
-            messages=[{"role": "user", "content": question}]
+            messages=[
+                {"role": "system", "content": "You are a precise scientific assistant. Provide brief, focused answers without elaboration."},
+                {"role": "user", "content": structured_prompt}
+            ]
         )
         model_response = response["message"]["content"]
 
