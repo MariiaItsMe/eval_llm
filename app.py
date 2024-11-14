@@ -1,149 +1,48 @@
 import ollama
-import asyncio
-from ragas.dataset_schema import MultiTurnSample
-from ragas.messages import HumanMessage, AIMessage, ToolMessage, ToolCall
-from ragas.metrics import AgentGoalAccuracyWithReference
-from typing import List, Dict, Any, Optional, Union
-from dataclasses import dataclass
+
+# Initialize the Ollama client
+client = ollama.Client(host="http://atlas1api.eurecom.fr:8019")
 
 
-@dataclass
-class Generation:
-    text: str
+# Placeholder for a RAG retrieval function (this would be an external API or a database query)
+def retrieve_relevant_context(prompt):
+    # Perform retrieval here
+    return "In this context, sick doesn't have a bad meaning. It means person feels excited."
 
 
-@dataclass
-class LLMResult:
-    generations: List[List[Generation]]
+# Example function to request a response from Ollama model
+def get_model_response_with_context(prompt, context):
+    # Combine context and prompt for a RAG-style input
+    full_input = f"Context: {context}\nQuestion: {prompt}"
+    response = client.chat(model="llama3.1", messages=[{"role": "user", "content": full_input}])
+    return response["message"]["content"]
 
 
-class OllamaLLM:
-    def __init__(self, host: str = "http://atlas1api.eurecom.fr:8019", model: str = "llama3.1"):
-        self.client = ollama.Client(host=host)
-        self.model = model
+# Calculate metrics as before
+def calculate_context_metrics(context, response):
+    context_tokens = set(context.lower().split())
+    response_tokens = set(response.lower().split())
+    relevant_tokens = context_tokens & response_tokens
 
-    async def generate(self, prompt: Any, n: Optional[int] = 1, **kwargs) -> LLMResult:
-        """
-        Generate response using Ollama
+    precision = len(relevant_tokens) / len(response_tokens) if response_tokens else 0.0
+    recall = len(relevant_tokens) / len(context_tokens) if context_tokens else 0.0
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) else 0.0
 
-        Args:
-            prompt: Input text in any format
-            n: Number of completions to generate
-            **kwargs: Additional arguments (ignored for Ollama compatibility)
-
-        Returns:
-            LLMResult with the required format for Ragas
-        """
-        # Handle any prompt object by extracting text
-        if hasattr(prompt, 'text'):
-            prompt_text = prompt.text
-        else:
-            prompt_text = str(prompt)
-
-        try:
-            response = self.client.chat(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt_text}]
-            )
-            # Create a list of Generation objects
-            generations = [Generation(text=response["message"]["content"])]
-            # Wrap in an additional list as per Ragas's expectation
-            return LLMResult(generations=[generations])
-        except Exception as e:
-            print(f"Error generating response: {str(e)}")
-            return LLMResult(generations=[[Generation(text="")]])
-
-    async def agenerate(self, prompt: Any, n: Optional[int] = 1, **kwargs) -> LLMResult:
-        """Async version of generate"""
-        return await self.generate(prompt, n, **kwargs)
-
-
-def create_conversation_sample(question: str, model_response: str, reference: str) -> MultiTurnSample:
-    """
-    Create a simple conversation sample for evaluation
-
-    Args:
-        question: The input question
-        model_response: The model's response
-        reference: The reference answer for evaluation
-
-    Returns:
-        MultiTurnSample: Formatted conversation sample
-    """
-    return MultiTurnSample(
-        user_input=[
-            HumanMessage(content=question),
-            AIMessage(content=model_response)
-        ],
-        reference=reference
-    )
-
-
-async def evaluate_conversation(conversation_sample: MultiTurnSample, llm: OllamaLLM) -> float:
-    """
-    Evaluate a conversation using Ragas metrics
-
-    Args:
-        conversation_sample: MultiTurnSample containing the conversation
-        llm: OllamaLLM instance
-
-    Returns:
-        float: Score from the evaluation
-    """
-    scorer = AgentGoalAccuracyWithReference()
-    scorer.llm = llm
-
-    try:
-        score = await scorer.multi_turn_ascore(conversation_sample)
-        return score
-    except Exception as e:
-        print(f"Error during evaluation: {str(e)}")
-        return 0.0
-
-
-def create_structured_prompt(question: str) -> str:
-    """
-    Create a structured prompt that encourages concise, focused answers
-    """
-    return f"""Please provide a brief, scientific explanation in 1-2 sentences. Focus only on the core mechanism. Do not include additional details or examples.
-
-Question: {question}"""
-
-
-async def main():
-    # Initialize the Ollama LLM
-    llm = OllamaLLM()
-
-    # Example question and reference answer
-    question = "Why is the sky blue?"
-    reference = "The sky appears blue due to Rayleigh scattering of sunlight in the atmosphere. Shorter wavelengths (blue) are scattered more than longer wavelengths."
-
-    try:
-        # Get response from Ollama using structured prompt
-        structured_prompt = create_structured_prompt(question)
-        response = llm.client.chat(
-            model="llama3.1",
-            messages=[
-                {"role": "system", "content": "You are a precise scientific assistant. Provide brief, focused answers without elaboration."},
-                {"role": "user", "content": structured_prompt}
-            ]
-        )
-        model_response = response["message"]["content"]
-
-        print(f"\nQuestion: {question}")
-        print(f"Model Response: {model_response}")
-        print(f"Reference Answer: {reference}\n")
-
-        # Create the conversation sample
-        sample = create_conversation_sample(question, model_response, reference)
-
-        # Evaluate the conversation
-        score = await evaluate_conversation(sample, llm)
-        print(f"Evaluation score: {score:.5f}")
-
-    except Exception as e:
-        print(f"Error during execution: {str(e)}")
+    return precision, recall, f1_score
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Define prompt and retrieve relevant context (RAG-style)
+    prompt = "I am about to cry, this is so sick!!!! - what emotion is expressed here??"
+    context = retrieve_relevant_context(prompt)  # Get relevant information using retrieval
+    print("Retrieved context:", context)
+
+    # Get model response with added context
+    response = get_model_response_with_context(prompt, context)
+    print("Model response:", response)
+
+    # Calculate Precision, Recall, and F1 Score
+    precision, recall, f1_score = calculate_context_metrics(context, response)
+    print(f"Context Precision: {precision:.2f}")
+    print(f"Context Recall: {recall:.2f}")
+    print(f"F1 Score: {f1_score:.2f}")
