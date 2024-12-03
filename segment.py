@@ -1,5 +1,4 @@
-import os
-import re
+import typing as t
 import time
 import pandas as pd
 from dotenv import load_dotenv
@@ -7,8 +6,34 @@ from datasets import Dataset
 from ragas.metrics import answer_correctness
 from ragas import evaluate
 
+
+from langchain_core.callbacks import Callbacks
+from ragas.llms import BaseRagasLLM
+from ragas.metrics import AnswerCorrectness
+from ragas.metrics._faithfulness import SentencesSimplified
+from ragas.prompt import PydanticPrompt, InputModel, OutputModel
+
+
 # Load environment variables
 load_dotenv()
+
+class MyCorrectnessPrompt(PydanticPrompt):
+
+    async def generate(self, llm: BaseRagasLLM, data: InputModel, temperature: t.Optional[float] = None,
+                       stop: t.Optional[t.List[str]] = None, callbacks: t.Optional[Callbacks] = None,
+                       retries_left: int = 3) -> OutputModel:
+        result = await super().generate(llm, data, temperature, stop, callbacks, retries_left)
+        callbacks.metadata["evaluated_segments"] = result
+        return result
+
+
+class MyAnswerCorrectness(AnswerCorrectness):
+
+    async def _create_simplified_statements(self, question: str, text: str,
+                                            callbacks: Callbacks) -> SentencesSimplified:
+        result = await super()._create_simplified_statements(question, text, callbacks)
+        callbacks.metadata["statements"] = result
+        return result
 
 
 def evaluate_all_predictions(csv_path):
@@ -40,7 +65,7 @@ def evaluate_all_predictions(csv_path):
         time.sleep(1)  # 1-second pause between operations
 
         # Evaluate using Ragas
-        score = evaluate(dataset, metrics=[answer_correctness])
+        score = evaluate(dataset, metrics=[MyAnswerCorrectness()])
 
         # Convert to pandas
         results_df = score.to_pandas()
@@ -66,33 +91,9 @@ def evaluate_all_predictions(csv_path):
 
     return final_results
 
-
 def main():
     csv_path = 'ragas_20_questions_dataset.csv'
-
-
-    results = evaluate_all_predictions(csv_path)
-
-
-    print("\nEvaluation Summary:")
-    print(f"Total Questions: {results['question'].nunique()}")
-
-    # Group by question
-    grouped_results = results.groupby('question')
-    print("\nDetailed Results:")
-    for question, group in grouped_results:
-        print(f"\nQuestion: {question}")
-        # Display predictions for this question
-        for index, row in group.iterrows():
-            print(f"  Prediction Number: {row['prediction_number']}")
-            print(f"  Prediction: {row['prediction']}")
-            print(f"  Answer Correctness: {row['answer_correctness']}")
-            print(f"  Total Statements: {row['total_statements']}")
-
-
-            print("  Statements:")
-            for stmt in row['statements']:
-                print(f"    - {stmt}")
+    result = evaluate_all_predictions(csv_path)
 
 
 if __name__ == "__main__":
