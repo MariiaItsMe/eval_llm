@@ -87,12 +87,7 @@ def main():
             print(f"  Prediction Number: {row['prediction_number']}")
             print(f"  Prediction: {row['prediction']}")
             print(f"  Answer Correctness: {row['answer_correctness']}")
-            print(f"  Total Statements: {row['total_statements']}")
 
-
-            print("  Statements:")
-            for stmt in row['statements']:
-                print(f"    - {stmt}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,5 @@
-import time
 import typing as t
-
+import asyncio
 import pandas as pd
 from datasets import Dataset
 from dotenv import load_dotenv
@@ -38,7 +37,7 @@ class MyCorrectnessPromptWrapper(PydanticPrompt):
         return await super().generate_multiple(llm, data, n, temperature, stop, callbacks, retries_left)
 
     def process_input(self, input: InputModel) -> InputModel:
-        return self._another.to_string(input)
+        return self._another.process_input(input)
 
     def process_output(self, output: OutputModel, input: InputModel) -> OutputModel:
         return self._another.process_output(output, input)
@@ -73,7 +72,7 @@ class MyAnswerCorrectness(AnswerCorrectness):
         super().init(run_config)
 
 
-def evaluate_all_predictions(csv_path):
+async def evaluate_all_predictions(csv_path):
     """
     Evaluate answer correctness using Ragas metrics for all predictions in a given CSV dataset
     """
@@ -87,6 +86,26 @@ def evaluate_all_predictions(csv_path):
     ]
     # Prepare results DataFrame
     results_list = []
+
+    # Async helper function to process a single data point
+    async def process_data_point(data):
+        run_config = RunConfig()
+        answer_correctness = MyAnswerCorrectness()
+        answer_correctness.llm = llm_factory(run_config=run_config) #TODO: we need to push down the LLM and make it Ollama and Mistral-Nemo (3 "ragas")
+        answer_correctness.embeddings = embedding_factory(run_config=run_config) #TODO: if the ragas is still better than our own way of splitting and evaluating - we should think about the ways to improve and write the report
+        answer_correctness.init(run_config)
+        answer_correctness.correctness_prompt = MyCorrectnessPromptWrapper(answer_correctness.correctness_prompt)
+
+        await answer_correctness.single_turn_ascore(data)
+
+        # Collect statements
+        statements = getattr(answer_correctness, 'statements', [])
+
+        # Collect evaluations
+        evaluations = getattr(answer_correctness.correctness_prompt, 'evaluated_segments', [])
+
+        return statements, evaluations
+
     # Evaluate each prediction
     for pred_idx, prediction in enumerate(predictions, 1):
         # Prepare dataset for this prediction
@@ -99,47 +118,70 @@ def evaluate_all_predictions(csv_path):
         dataset = convert_v1_to_v2_dataset(dataset)
         dataset = EvaluationDataset.from_list(dataset.to_list())
 
-        time.sleep(1)  # 1-second pause between operations
-        # Evaluate using Ragas
-        run_config = RunConfig()
-        for d in dataset:
-            answer_correctness = MyAnswerCorrectness()
-            answer_correctness.llm = llm_factory(run_config=run_config)  # TODO: replace with Ollama
-            answer_correctness.embeddings = embedding_factory(
-                run_config=run_config)  # TODO: replace with Ollama embeddings
-            answer_correctness.init(run_config)
-            answer_correctness.correctness_prompt = MyCorrectnessPromptWrapper(answer_correctness.correctness_prompt)
+        # Run async operations to process all data points
+        results = await asyncio.gather(*[process_data_point(d) for d in dataset])
 
-            answer_correctness.single_turn_score(d)
-            statements = answer_correctness.statements  # TODO: you can get the statements here.
-            evaluations = answer_correctness.correctness_prompt.evaluated_segments
-            pass
+        # Separate statements and evaluations
+        all_statements, all_evaluations = zip(*results)
 
+        # Evaluate the full dataset
         score = evaluate(dataset, metrics=[MyAnswerCorrectness()])
+
         # Convert to pandas
         results_df = score.to_pandas()
+
         # Add additional columns
         results_df['prediction_number'] = pred_idx
         results_df['question'] = questions
         results_df['ground_truth'] = ground_truths
         results_df['prediction'] = prediction
+
+        results_df['statements'] = list(all_statements)
+        results_df['evaluations'] = list(all_evaluations)
+
         results_list.append(results_df)
+
     # Concatenate results from all predictions
     final_results = pd.concat(results_list, ignore_index=True)
+
     # Debugging: Print out details about the DataFrame
     print("\nDebugging Information:")
-    print(f"Original DataFrame shape: {df.shape}")
-    print(f"Final results shape: {final_results.shape}")
     print(f"Number of unique questions: {final_results['question'].nunique()}")
     print(f"Prediction numbers: {final_results['prediction_number'].unique()}")
+
+    # Set pandas options to display full text for debugging
+    pd.set_option('display.max_colwidth', None)
+
+    # Print statements and evaluations
+    print("\nStatements:")
+    print(final_results['statements'].to_string(index=False))
+    print("\nEvaluations:")
+    for evaluation in final_results['evaluations']:
+        print(evaluation)
+
+    # Reset pandas options to default after printing
+    pd.reset_option('display.max_colwidth')
+
     return final_results
 
 
-def main():
+async def main():
     csv_path = 'ragas_20_questions_dataset.csv'
-    result = evaluate_all_predictions(csv_path)
+    results = await evaluate_all_predictions(csv_path)
+
+    grouped_results = results.groupby('question')
+    print("\nDetailed Results:")
+    for question, group in grouped_results:
+        print(f"\nQuestion: {question}")
+        # Display predictions for this question
+        for index, row in group.iterrows():
+            print(f"  Prediction Number: {row['prediction_number']}")
+            print(f"  Prediction: {row['prediction']}")
+            print(f"  Answer Correctness: {row['answer_correctness']}")
+
+    return results
 
 
 if __name__ == "__main__":
     load_dotenv()
-    main()
+    asyncio.run(main())
