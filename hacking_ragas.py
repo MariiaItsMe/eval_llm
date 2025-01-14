@@ -12,6 +12,9 @@ from ragas.metrics._answer_correctness import ClassificationWithReason
 from ragas.metrics._faithfulness import SentencesSimplified
 from ragas.prompt import PydanticPrompt, InputModel, OutputModel
 from ragas.utils import convert_v1_to_v2_dataset
+from typing import Optional, Dict
+from llama_index.llms.ollama import Ollama
+from ragas.llms import LangchainLLMWrapper
 
 
 class MyCorrectnessPromptWrapper(PydanticPrompt):
@@ -71,6 +74,55 @@ class MyAnswerCorrectness(AnswerCorrectness):
     def init(self, run_config: RunConfig):
         super().init(run_config)
 
+
+class myRunConfig:
+    timeout: Optional[float] = None
+    # Add other configuration options as needed
+
+
+def llm_factory(
+        model: str = "llama2",
+        run_config: Optional[myRunConfig] = None,
+        default_headers: Optional[Dict[str, str]] = None,
+        base_url: Optional[str] = None,
+) -> BaseRagasLLM:
+    """
+    Create and return a BaseRagasLLM instance configured for Ollama.
+
+    Parameters
+    ----------
+    model : str, optional
+        The name of the Ollama model to use, by default "llama2"
+    run_config : RunConfig, optional
+        Configuration for the run, by default None
+    default_headers : dict of str, optional
+        Default headers to be used in API requests, by default None
+    base_url : str, optional
+        Base URL for the Ollama API, by default None
+
+    Returns
+    -------
+    BaseRagasLLM
+        An instance of BaseRagasLLM configured with the specified parameters.
+    """
+    # Extract timeout from run_config if provided
+    timeout = None
+    if run_config is not None:
+        timeout = run_config.timeout
+
+    # Configure Ollama model
+    ollama_kwargs = {
+        "model": model,
+        "timeout": timeout if timeout is not None else 120,  # Default timeout
+    }
+
+    # Add base_url if provided
+    if base_url is not None:
+        ollama_kwargs["base_url"] = base_url
+
+    ollama_model = Ollama(**ollama_kwargs)
+
+    return LangchainLLMWrapper(ollama_model, run_config)
 
 async def evaluate_all_predictions(csv_path):
     """

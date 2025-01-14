@@ -16,6 +16,10 @@ def calculate_f1_score(labels):
         return 0
     return numerator / denominator
 
+# TODO: statements split by dots and check each of the statment compared to ground truth ; option 2: ragas way (extraction depended statemnets(can just copy them))
+# TODO: the issue can be the model that are making decision ; if we have time: we take random piece of text and then modify that we can ask chatgpt to generate the dataset
+# TODO: how to evaluate that; fro a presentation mb some pictures but report: tables (more precise) - ranking (from the best to worse) with all the cross-products we cam up with and with the original approaches (standard methods aka ragas)
+
 if __name__ == "__main__":
     try:
         # Load the model
