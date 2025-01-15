@@ -2,23 +2,35 @@ import torch
 from sentence_transformers import CrossEncoder
 import pandas as pd
 import numpy as np
+import pysbd
 
 
 def calculate_f1_score(labels):
+    """Calculate F1 score for a single prediction's sentence-level labels"""
     tp = labels.count('TP (entailment)')
     fp = labels.count('FP (contradiction)')
     fn = labels.count('FN (neutral)')
 
-    denominator = tp
-    numerator = tp + 0.5 * (fp + fn)
+    if tp == 0:
+        return 0.0
 
-    if denominator == 0:
-        return 0
-    return numerator / denominator
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
 
-# TODO: statements split by dots and check each of the statment compared to ground truth ; option 2: ragas way (extraction depended statemnets(can just copy them))
-# TODO: the issue can be the model that are making decision ; if we have time: we take random piece of text and then modify that we can ask chatgpt to generate the dataset
-# TODO: how to evaluate that; fro a presentation mb some pictures but report: tables (more precise) - ranking (from the best to worse) with all the cross-products we cam up with and with the original approaches (standard methods aka ragas)
+    if precision + recall == 0:
+        return 0.0
+
+    f1 = 2 * (precision * recall) / (precision + recall)
+    return f1
+
+
+def segment_text(text):
+    """Split text into sentences using pysbd."""
+    seg = pysbd.Segmenter(language="en", clean=True)
+    sentences = seg.segment(text)
+    # Remove very short segments that might be artifacts
+    return [s.strip() for s in sentences if len(s.split()) > 2]
+
 
 if __name__ == "__main__":
     try:
@@ -27,7 +39,6 @@ if __name__ == "__main__":
             "cross-encoder/nli-deberta-v3-large",
             tokenizer_args={"use_fast": False}
         )
-
         # Set device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.model.to(device)
@@ -36,8 +47,8 @@ if __name__ == "__main__":
         df = pd.read_csv('ragas_20_questions_dataset.csv')
 
         # Initialize lists for storing results
-        all_pairs = []
         all_results = []
+        all_f1_scores = []
         label_mapping = ['FP (contradiction)', 'TP (entailment)', 'FN (neutral)']
 
         # Process each row
@@ -45,29 +56,70 @@ if __name__ == "__main__":
             premise = row['ground_truth']
             predictions = [row[f'prediction_{i}'] for i in range(1, 5)]
 
-            # Create premise-hypothesis pairs
-            pairs = [(premise, pred) for pred in predictions]
-            all_pairs.extend(pairs)
+            # Split ground truth into sentences using pysbd
+            truth_sentences = segment_text(premise)
+            if not truth_sentences:
+                truth_sentences = [premise]
 
-            # Get predictions in batches
-            scores = model.predict(pairs)
-            labels = [label_mapping[score_max] for score_max in scores.argmax(axis=1)]
-            all_results.extend(labels)
+            # Process each prediction
+            row_results = []
+            row_f1_scores = []
 
-            # Print results for each row
-            print(f"\nQuestion {idx + 1}:")
-            for pred_num, label in enumerate(labels, 1):
-                print(f"Prediction {pred_num}: {label}")
+            for pred_num, prediction in enumerate(predictions, 1):
+                # Split prediction into sentences using pysbd
+                pred_sentences = segment_text(prediction)
+                if not pred_sentences:
+                    pred_sentences = [prediction]
 
-            f1_score = calculate_f1_score(labels)
-            print(f"F1 Score: {f1_score:.3f}")
+                # Create all possible pairs of sentences
+                pairs = []
+                for truth_sent in truth_sentences:
+                    for pred_sent in pred_sentences:
+                        pairs.append((truth_sent, pred_sent))
+
+                # Get predictions using the model
+                scores = model.predict(pairs)
+                sentence_labels = [label_mapping[score_max] for score_max in scores.argmax(axis=1)]
+
+                # Calculate F1 score for this prediction's sentence pairs
+                prediction_f1 = calculate_f1_score(sentence_labels)
+                row_f1_scores.append(prediction_f1)
+
+                # Determine final label for this prediction
+                if 'TP (entailment)' in sentence_labels:
+                    final_label = 'TP (entailment)'
+                elif 'FP (contradiction)' in sentence_labels:
+                    final_label = 'FP (contradiction)'
+                else:
+                    final_label = 'FN (neutral)'
+
+                row_results.append(final_label)
+                print(f"\nQuestion {idx + 1}, Prediction {pred_num}:")
+                print(f"Label: {final_label}")
+                print(f"F1 Score: {prediction_f1:.3f}")
+
+                # Print detailed sentence-level analysis
+                print("Sentence-level analysis:")
+                for i, (pair, label) in enumerate(zip(pairs, sentence_labels)):
+                    print(f"Truth: {pair[0]}")
+                    print(f"Pred:  {pair[1]}")
+                    print(f"Label: {label}\n")
+
+            all_results.extend(row_results)
+            all_f1_scores.extend(row_f1_scores)
+
+            # Calculate average F1 score for the question
+            avg_f1 = sum(row_f1_scores) / len(row_f1_scores)
+            print(f"\nAverage F1 Score for Question {idx + 1}: {avg_f1:.3f}")
 
         # Create results DataFrame
         results_df = pd.DataFrame({
             'Question_Number': np.repeat(range(1, len(df) + 1), 4),
             'Prediction_Number': np.tile(range(1, 5), len(df)),
-            'Label': all_results
+            'Label': all_results,
+            'F1_Score': all_f1_scores
         })
+
 
     except Exception as e:
         print(f"An error occurred: {e}")
