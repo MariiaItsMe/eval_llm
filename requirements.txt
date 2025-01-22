@@ -1,4 +1,4 @@
-ollama==0.3.3
+ollama==0.4.7
 ragas==0.2.3
 nltk==3.9.1
 

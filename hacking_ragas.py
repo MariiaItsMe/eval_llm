@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from langchain_core.callbacks import Callbacks
 from ragas import evaluate, EvaluationDataset, RunConfig
 from ragas.embeddings import embedding_factory
-from ragas.llms import BaseRagasLLM, llm_factory
+from ragas.llms import BaseRagasLLM
 from ragas.metrics import AnswerCorrectness
 from ragas.metrics._answer_correctness import ClassificationWithReason
 from ragas.metrics._faithfulness import SentencesSimplified
@@ -80,7 +80,7 @@ class myRunConfig:
     # Add other configuration options as needed
 
 
-def llm_factory(
+def myllm_factory(
         model: str = "llama2",
         run_config: Optional[myRunConfig] = None,
         default_headers: Optional[Dict[str, str]] = None,
@@ -143,7 +143,7 @@ async def evaluate_all_predictions(csv_path):
     async def process_data_point(data):
         run_config = RunConfig()
         answer_correctness = MyAnswerCorrectness()
-        answer_correctness.llm = llm_factory(run_config=run_config) #TODO: we need to push down the LLM and make it Ollama and Mistral-Nemo (3 "ragas")
+        answer_correctness.llm = myllm_factory(run_config=run_config) #TODO: we need to push down the LLM and make it Ollama and Mistral-Nemo (3 "ragas")
         answer_correctness.embeddings = embedding_factory(run_config=run_config) #TODO: if the ragas is still better than our own way of splitting and evaluating - we should think about the ways to improve and write the report
         answer_correctness.init(run_config)
         answer_correctness.correctness_prompt = MyCorrectnessPromptWrapper(answer_correctness.correctness_prompt)
