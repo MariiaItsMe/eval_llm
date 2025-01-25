@@ -1,5 +1,19 @@
 
-Processing prediction set 1
+Processing Prediction 1 for Question 3
+Prediction text: This quote states Skinner’s theory of Operant Conditioning, which says that everyone’s behavior is shaped by consequences. Positive consequences, like rewards or praise, can encourage desired behaviors, while negative consequences, like punishments, can keep from unwanted behaviors. In this way, the consequences of an action can influence the chances of that action being repeated in the future.
 
-Processing Prediction 1 for Question 0
-Prediction text: Skinner’s quote describes his belief that psychology should focus on understanding people behavior and the underlying principles that drive it, rather than simply examining the workings of machines. He believed that people's behavior is complex, and that psychology should seek to understand the underlying principles of both.
+Debug Information:
+Question: What does it mean: The consequences of an act affect the probability of its occurring again.
+Text being processed: This quote states Skinner’s theory of Operant Conditioning, which says that everyone’s behavior is shaped by consequences. Positive consequences, like rewards or praise, can encourage desired behaviors, while negative consequences, like punishments, can keep from unwanted behaviors. In this way, the consequences of an action can influence the chances of that action being repeated in the future.
+Generated statements:
+- sentence_index=0 simpler_statements=["The quote describes Skinner's theory of Operant Conditioning.", "Skinner's theory of Operant Conditioning states that everyone's behavior is shaped by consequences."]
+- sentence_index=1 simpler_statements=['Positive consequences, such as rewards or praise, can encourage desired behaviors.', 'Negative consequences, such as punishments, can discourage unwanted behaviors.']
+- sentence_index=2 simpler_statements=['The consequences of an action can affect the likelihood of that action happening again in the future.']
+
+Debug Information:
+Question: What does it mean: The consequences of an act affect the probability of its occurring again.
+Text being processed: This quote reflects Skinner’s theory of Operant Conditioning, which holds that behavior is shaped by consequences. Positive consequences, such as rewards or praise, can encourage desired behaviors, while negative consequences, such as punishment, can deter unwanted behaviors. In this way, the consequences of an action can influence the likelihood of that action being repeated in the future.
+Generated statements:
+- sentence_index=0 simpler_statements=['The quote reflects Skinner’s theory of Operant Conditioning.', 'Skinner’s theory of Operant Conditioning holds that behavior is shaped by consequences.']
+- sentence_index=1 simpler_statements=['Positive consequences, such as rewards or praise, can encourage desired behaviors.', 'Negative consequences, such as punishment, can deter unwanted behaviors.']
+- sentence_index=2 simpler_statements=['The consequences of an action can influence the likelihood of that action being repeated in the future.']

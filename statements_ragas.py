@@ -1,20 +1,22 @@
 import typing as t
-import asyncio
 import pandas as pd
 from datasets import Dataset
 from dotenv import load_dotenv
 from langchain_core.callbacks import Callbacks
-from ragas import evaluate, EvaluationDataset, RunConfig
-from ragas.embeddings import embedding_factory
-from ragas.llms import BaseRagasLLM, llm_factory
-from ragas.metrics import AnswerCorrectness
-from ragas.metrics._answer_correctness import ClassificationWithReason
+from ragas import evaluate, EvaluationDataset
+from ragas.embeddings import LlamaIndexEmbeddingsWrapper
+from ragas.llms import BaseRagasLLM, LlamaIndexLLMWrapper
+from ragas.metrics import AnswerCorrectness, AnswerSimilarity
+from ragas.metrics._answer_correctness import ClassificationWithReason, logger
 from ragas.metrics._faithfulness import SentencesSimplified
 from ragas.prompt import PydanticPrompt, InputModel, OutputModel
-from ragas.utils import convert_v1_to_v2_dataset
 from typing import List, Optional
 import copy
 import sys
+import asyncio
+import os
+from llama_index.llms.ollama import Ollama
+from llama_index.embeddings.openai import OpenAIEmbedding
 
 # Logging wrapper to capture and save terminal output
 class LoggingContext:
@@ -85,12 +87,40 @@ class MyCorrectnessPromptWrapper(PydanticPrompt):
                 f"examples={self._another.examples}, "
                 f"language={self._another.language})")
 
+def initialize_evaluator():
+    """Initialize and return the LLM and embeddings for evaluation."""
+    try:
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found in environment variables or .env file")
+
+        # Initialize LLM with Ollama
+        base_url = os.getenv('BASE_URL', 'http://atlas1api.eurecom.fr:8019')
+        llm = Ollama(model="llama3.1:70b", base_url=base_url)
+        evaluator_llm = LlamaIndexLLMWrapper(llm)
+
+        # Initialize Embeddings with OpenAI
+        openai_embedding = OpenAIEmbedding(
+            model="text-embedding-ada-002",
+            api_key=api_key
+        )
+        embeddings = LlamaIndexEmbeddingsWrapper(embeddings=openai_embedding)
+
+        return evaluator_llm, embeddings
+
+    except Exception as e:
+        logger.error(f"Failed to initialize evaluator: {str(e)}")
+        raise
+
+
 
 class MyAnswerCorrectness(AnswerCorrectness):
     def __init__(self):
         super().__init__()
         self.statements = None
         self._last_processed_text = None
+        # Set AnswerSimilarity here
+        self.answer_similarity = AnswerSimilarity()
 
     async def _create_simplified_statements(self, question: str, text: str,
                                             callbacks: Callbacks) -> SentencesSimplified:
@@ -123,24 +153,23 @@ class MyAnswerCorrectness(AnswerCorrectness):
 
 
 async def process_single_prediction(question: str, ground_truth: str, prediction: str,
-                                    pred_idx: int, question_idx: int):
+                                    pred_idx: int, question_idx: int, evaluator_llm, embeddings):
     print(f"\nProcessing Prediction {pred_idx} for Question {question_idx}")
     print(f"Prediction text: {prediction}")
 
-    data_samples = {
-        'question': [question],
-        'ground_truth': [ground_truth],
-        'response': [prediction]
-    }
-    single_dataset = Dataset.from_dict(data_samples)
-    single_dataset = convert_v1_to_v2_dataset(single_dataset)
-    single_dataset = EvaluationDataset.from_list(single_dataset.to_list())
+    # Create the dataset with the correct keys that RAGAS expects
+    eval_data = [{
+        'user_input': question,  # Changed from 'question' to 'user_input'
+        'reference': ground_truth,  # Changed from 'ground_truth' to 'reference'
+        'response': prediction  # This key remains the same
+    }]
 
-    run_config = RunConfig()
+    # Create the evaluation dataset directly with the correct format
+    single_dataset = EvaluationDataset.from_list(eval_data)
+
     answer_correctness = MyAnswerCorrectness()
-    answer_correctness.llm = llm_factory(run_config=run_config)
-    answer_correctness.embeddings = embedding_factory(run_config=run_config)
-    answer_correctness.init(run_config)
+    answer_correctness.llm = evaluator_llm
+    answer_correctness.embeddings = embeddings
 
     data_point = single_dataset[0]
     await answer_correctness.single_turn_ascore(data_point)
@@ -149,6 +178,7 @@ async def process_single_prediction(question: str, ground_truth: str, prediction
     score = evaluate(single_dataset, metrics=[answer_correctness])
     results_df = score.to_pandas()
 
+    # Add metadata to results
     results_df['prediction_number'] = pred_idx
     results_df['question'] = question
     results_df['ground_truth'] = ground_truth
@@ -158,27 +188,35 @@ async def process_single_prediction(question: str, ground_truth: str, prediction
     return results_df, statements
 
 
-async def evaluate_all_predictions(csv_path):
+async def evaluate_all_predictions(csv_path, start_prediction_set=1, start_question=0):
+    evaluator_llm, embeddings = initialize_evaluator()
+
     df = pd.read_csv(csv_path)
     questions = df['question'].tolist()
     ground_truths = df['ground_truth'].tolist()
-    predictions = [df[f'prediction_{i}'].tolist() for i in range(1, 5)]
+
+    num_prediction_sets = len([col for col in df.columns if col.startswith('prediction_')])
 
     results_list = []
-    output_log = []  # In-memory log
+    output_log = []
 
-    for pred_idx, prediction_set in enumerate(predictions, 1):
-        print(f"\nProcessing prediction set {pred_idx}")
+    # Adjust range based on start_prediction_set
+    for pred_idx in range(start_prediction_set, num_prediction_sets + 1):
+        logger.info(f"\nProcessing prediction set {pred_idx}")
         output_log.append(f"\nProcessing prediction set {pred_idx}\n")
 
+        predictions = df[f'prediction_{pred_idx}'].tolist()
+
+        # Adjust question range based on start_question
         results = []
-        for i, (q, gt, pred) in enumerate(zip(questions, ground_truths, prediction_set)):
-            result = await process_single_prediction(q, gt, pred, pred_idx, i)
+        for i in range(start_question, len(questions)):
+            q, gt, pred = questions[i], ground_truths[i], predictions[i]
+            result = await process_single_prediction(q, gt, pred, pred_idx, i, evaluator_llm, embeddings)
             results.append(result)
 
         results_dfs, all_statements = zip(*results)
 
-        for i, (q, p, stmts) in enumerate(zip(questions, prediction_set, all_statements)):
+        for i, (q, p, stmts) in enumerate(results, start=start_question):
             log_entry = [
                 f"\n{'=' * 50}",
                 f"Index: {i}, Prediction {pred_idx}",
@@ -197,14 +235,13 @@ async def evaluate_all_predictions(csv_path):
             else:
                 log_entry.append("No statements generated")
 
-            log_entry.append("")  # Add a blank line
+            log_entry.append("")
             output_log.extend(log_entry)
 
         results_list.extend(results_dfs)
 
-    # Print all logs at the end or process them as needed
     for entry in output_log:
-        print(entry)
+        logger.info(entry)
 
     final_results = pd.concat(results_list, ignore_index=True)
     return final_results
@@ -212,7 +249,12 @@ async def evaluate_all_predictions(csv_path):
 
 async def main():
     csv_path = 'ragas_20_questions_dataset.csv'
-    results = await evaluate_all_predictions(csv_path)
+    # You can now easily change these parameters
+    results = await evaluate_all_predictions(
+        csv_path,
+        start_prediction_set=1,  # Change this to select prediction set
+        start_question=3 # Change this to select starting question
+    )
     return results
 
 
@@ -221,3 +263,4 @@ if __name__ == "__main__":
     log_file = "terminal_output.log"
     with LoggingContext(log_file):
         asyncio.run(main())
+
