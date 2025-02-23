@@ -1,5 +1,9 @@
 # eval_llm
-This project is designed to evaluate a Language Model (LLM) on a custom dataset using various scripts and utilities.
+Large Language Models (LLMs) are known to generate factually incorrect answers. However, they do so with such fluency that it often requires extra attention and criticism to spot the mistakes. This work challenges that dependency by proposing and rigorously comparing alternative implementations for this metric, paving the way for more robust, transparent, and unbiased evaluation frameworks.
+
+
+
+We utilize a custom, expert-generated dataset, that consists of 20 carefully formulated questions, each paired with a corresponding ground truth answer. In this project, we employ RAGAS prompts combined with multiple state-of-the-art LLMs: GPT-4o, Llama3.3, and NLI-DeBERTa-v3 to address both sentence splitting and classification tasks
 
 ## **Scripts and Utilities**
 - **`app.py`** – Script for separating usage statements and performing evaluation using the Ragas framework.
