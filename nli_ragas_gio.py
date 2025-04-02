@@ -158,7 +158,7 @@ if __name__ == "__main__":
     # expert = "COVID-19 spreads via airborne droplets. Vaccines reduce severe outcomes. Most severe outcomes involves difficulty for breathing."
     # llm = "The COVID-19 virus transmits through air. To control COVID-19, governments imposed lockdowns. Vaccines reduced hospitalization risk through a reduction of severe cases."
 
-    with open("ai_generated_dataset_llm_judge.json", "r") as file:
+    with open("dataset.json", "r") as file:
         data = json.load(file)
 
     eval_dataset = AnnotatedDataset(samples=[

@@ -1,23 +1,54 @@
-from scipy.stats import pearsonr
+import itertools
+from typing import Tuple
+
+import numpy as np
+import numpy.typing as npt
+from scipy.stats import spearmanr
 
 from nli_ragas_gio import AssessmentDataset
+
+
+def compute_statistic(scores: npt.NDArray, rankings: npt.NDArray) -> Tuple[float, float, float]:
+    sp = np.array([spearmanr(s, r).statistic for s, r in zip(scores, rankings)])
+
+    num_bootstraps = 10000
+    boot_means = np.array([
+        np.mean(np.random.choice(sp, size=len(sp), replace=True))
+        for _ in range(num_bootstraps)
+    ])
+    ci_lower, ci_upper = np.percentile(boot_means, [2.5, 97.5])
+
+    return np.mean(sp), ci_lower, ci_upper
+
 
 if __name__ == "__main__":
     with open("./assessment.json", "r", encoding="utf-8") as f:
         dataset = AssessmentDataset.model_validate_json(f.read())
 
-    x = [5. - float(e.ref_score[1]) for e in dataset.entries]
-    y = [e.ragas.score for e in dataset.entries]
-    res = pearsonr(x, y, alternative='two-sided', method=None, axis=0)
+    ragas_scores = []
+    ours_scores = []
+    for k, g in itertools.groupby(dataset.entries, lambda i: i.question):
+        assessments = list(g)
+        assert len(assessments) == 5
 
-    print(f"Pearson correlation - Ragas/GT")
-    print(res)
-    print(res.confidence_interval(confidence_level=0.95))
+        r_scores = []
+        o_scores = []
+        for e in sorted(assessments, key=lambda a: a.ref_score):
+            r_scores.append(e.ragas.score)
+            o_scores.append(e.ours.score)
+
+        ragas_scores.append(r_scores)
+        ours_scores.append(o_scores)
+
+    true_ranking = np.tile(np.arange(5, 0, -1), (len(dataset.entries), 1))
+
+    print(f"Spearman correlation - Ragas/GT")
+    mean, ci_lower, ci_upper = compute_statistic(np.array(ragas_scores), true_ranking)
+    print(f"Mean Spearman Correlation: {mean:.3f}")
+    print(f"95% Confidence Interval: [{ci_lower:.3f}, {ci_upper:.3f}]")
     print()
 
-    y = [e.ours.score for e in dataset.entries]
-    res = pearsonr(x, y, alternative='two-sided', method=None, axis=0)
-
-    print(f"Pearson correlation - Ours/GT")
-    print(res)
-    print(res.confidence_interval(confidence_level=0.95))
+    print(f"Spearman correlation - Ours/GT")
+    mean, ci_lower, ci_upper = compute_statistic(np.array(ours_scores), true_ranking)
+    print(f"Mean Spearman Correlation: {mean:.3f}")
+    print(f"95% Confidence Interval: [{ci_lower:.3f}, {ci_upper:.3f}]")
