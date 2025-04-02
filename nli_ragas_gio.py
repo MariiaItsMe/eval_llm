@@ -151,7 +151,7 @@ class AltFactualCorrectness(FactualCorrectness):
 
 
 if __name__ == "__main__":
-    evaluator_llm = LangchainLLMWrapper(ChatOpenAI(model="gpt-4o-mini"))
+    evaluator_llm = LangchainLLMWrapper(ChatOpenAI(model="gpt-4o-mini", temperature=0))
     new_fc = AltFactualCorrectness(llm=evaluator_llm, atomicity="high", coverage="high")
     fc = FactualCorrectness(llm=evaluator_llm, atomicity="high", coverage="high")
     # question = "How does COVID-19 spreads?"
@@ -166,7 +166,7 @@ if __name__ == "__main__":
                                   response=response,
                                   reference=i["ground_truth"],
                                   ref_score=ref_score)
-        for i in data for ref_score, response in list(data[0]["answers"].items())
+        for i in data for ref_score, response in i["answers"].items()
     ])
 
     results = evaluate(eval_dataset, metrics=[new_fc, fc])
