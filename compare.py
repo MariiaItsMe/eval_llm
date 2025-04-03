@@ -1,11 +1,13 @@
+import argparse
 import itertools
+import pathlib
 from typing import Tuple
 
 import numpy as np
 import numpy.typing as npt
 from scipy.stats import spearmanr
 
-from nli_ragas_gio import AssessmentDataset
+from models import AssessmentDataset
 
 
 def compute_statistic(scores: npt.NDArray, rankings: npt.NDArray) -> Tuple[float, float, float]:
@@ -22,7 +24,11 @@ def compute_statistic(scores: npt.NDArray, rankings: npt.NDArray) -> Tuple[float
 
 
 if __name__ == "__main__":
-    with open("./assessment.json", "r", encoding="utf-8") as f:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input-file", type=pathlib.Path, required=True)
+    args = parser.parse_args()
+
+    with open(args.input_file, "r", encoding="utf-8") as f:
         dataset = AssessmentDataset.model_validate_json(f.read())
 
     ragas_scores = []

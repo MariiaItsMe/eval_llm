@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import List, Optional, Type
 
@@ -12,7 +13,10 @@ from ragas.dataset_schema import SingleTurnSample, EvaluationDataset
 from ragas.llms import LangchainLLMWrapper
 from ragas.metrics import FactualCorrectness
 from ragas.metrics._factual_correctness import ClaimDecompositionPrompt
+from ragas.metrics._faithfulness import NLIStatementPrompt
+from ragas.metrics.utils import fbeta_score
 from sentence_transformers import CrossEncoder
+from tqdm import tqdm
 
 from models import AssessmentDataset, StatementEval, FactualCorrectnessEval, StatementPairEval, \
     AltFactualCorrectnessEval, AssessmentEntry
@@ -25,11 +29,83 @@ class AnnotatedDataset(EvaluationDataset):
 
 class AnnotatedSingleTurnSample(SingleTurnSample):
     ref_score: Optional[str] = None
+    reference_claims: Optional[List[str]] = None
+    response_claims: Optional[List[str]] = None
+
+
+class HackedFactualCorrectness(FactualCorrectness):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.nli_prompt = NLIStatementPrompt()
+
+    def _only_required_columns_single_turn(self, sample: SingleTurnSample) -> SingleTurnSample:
+        return sample
+
+    async def _single_turn_ascore(self, sample: SingleTurnSample, callbacks: Callbacks) -> float:
+        assert isinstance(sample, AnnotatedSingleTurnSample)
+        reference = sample.reference
+        response = sample.response
+        reference_claims = sample.reference_claims
+        response_claims = sample.response_claims
+
+        assert self.llm is not None, "LLM must be set"
+        assert reference is not None, "Reference is not set"
+        assert response is not None, "Response is not set"
+        assert response_claims is not None, "Response claims is not set"
+
+        split_rm, recall_cb = new_group(
+            name="claim_decomposition_prompt",
+            inputs={"data": response},
+            callbacks=callbacks,
+            metadata={"type": "nli-evaluation"},
+        )
+        split_rm.on_chain_end({"output": {"claims": response_claims}})
+
+        # response_claims = await self.decompose_claims(response, callbacks)
+        self.nli_prompt.name = "precision_eval"
+        reference_response = await self.verify_claims(
+            premise=reference, hypothesis_list=response_claims, callbacks=callbacks
+        )
+
+        if self.mode != "precision":
+            # reference_claims = await self.decompose_claims(reference, callbacks)
+            self.nli_prompt.name = "recall_eval"
+            response_reference = await self.verify_claims(
+                premise=response, hypothesis_list=reference_claims, callbacks=callbacks
+            )
+        else:
+            response_reference = np.array([], dtype=bool)
+
+        tp = sum(reference_response)
+        fp = sum(~reference_response)
+        if self.mode != "precision":
+            fn = sum(~response_reference)
+        else:
+            fn = 0
+
+        if self.mode == "precision":
+            score = tp / (tp + fp + 1e-8)
+        elif self.mode == "recall":
+            score = tp / (tp + fn + 1e-8)
+        else:
+            score = fbeta_score(tp, fp, fn, self.beta)
+
+        return np.round(score, 2)
 
 
 class AltFactualCorrectness(FactualCorrectness):
+    # _required_columns: Dict[MetricType, Set[str]] = field(
+    #     default_factory=lambda: {
+    #         MetricType.SINGLE_TURN: {"response", "reference", "reference_claims", "response_claims"}
+    #     }
+    # )
+
     label_mapping = ['contradiction', 'entailment', 'neutral']
     nli_model: Optional[CrossEncoder] = None
+
+    def _only_required_columns_single_turn(self, sample: SingleTurnSample) -> SingleTurnSample:
+        return sample
 
     def __post_init__(self):
         super().__post_init__()
@@ -50,18 +126,34 @@ class AltFactualCorrectness(FactualCorrectness):
         raise NotImplementedError
 
     async def _single_turn_ascore(self, sample: SingleTurnSample, callbacks: Callbacks) -> float:
+        assert isinstance(sample, AnnotatedSingleTurnSample)
         reference = sample.reference
         response = sample.response
+        reference_claims = sample.reference_claims
+        response_claims = sample.response_claims
+
         assert self.nli_model is not None, "CrossEncoder must be loaded"
         assert self.llm is not None, "LLM must be set"
         assert reference is not None, "Reference is not set"
         assert response is not None, "Response is not set"
+        assert reference_claims is not None, "Reference claims is not set"
+        assert response_claims is not None, "Response claims is not set"
 
-        self.claim_decomposition_prompt.name = "response_claim_decomposition_prompt"
-        response_claims = await self.decompose_claims(response, callbacks)
+        split_rm, recall_cb = new_group(
+            name="reference_claim_decomposition_prompt",
+            inputs={"data": reference},
+            callbacks=callbacks,
+            metadata={"type": "nli-evaluation"},
+        )
+        recall_cb.on_chain_end({"output": {"claims": reference_claims}})
 
-        self.claim_decomposition_prompt.name = "reference_claim_decomposition_prompt"
-        reference_claims = await self.decompose_claims(reference, callbacks)
+        split_rm, recall_cb = new_group(
+            name="response_claim_decomposition_prompt",
+            inputs={"data": response},
+            callbacks=callbacks,
+            metadata={"type": "nli-evaluation"},
+        )
+        recall_cb.on_chain_end({"output": {"claims": response_claims}})
 
         precision_pairs = [(ref, resp) for resp in response_claims for ref in reference_claims]
 
@@ -112,7 +204,7 @@ class AltFactualCorrectness(FactualCorrectness):
 if __name__ == "__main__":
     evaluator_llm = LangchainLLMWrapper(ChatOpenAI(model="gpt-4o-mini", temperature=0))
     new_fc = AltFactualCorrectness(llm=evaluator_llm, atomicity="high", coverage="high")
-    fc = FactualCorrectness(llm=evaluator_llm, atomicity="high", coverage="high")
+    fc = HackedFactualCorrectness(llm=evaluator_llm, atomicity="high", coverage="high")
     # question = "How does COVID-19 spreads?"
     # expert = "COVID-19 spreads via airborne droplets. Vaccines reduce severe outcomes. Most severe outcomes involves difficulty for breathing."
     # llm = "The COVID-19 virus transmits through air. To control COVID-19, governments imposed lockdowns. Vaccines reduced hospitalization risk through a reduction of severe cases."
@@ -120,13 +212,25 @@ if __name__ == "__main__":
     with open("dataset.json", "r") as file:
         data = json.load(file)
 
-    eval_dataset = AnnotatedDataset(samples=[
-        AnnotatedSingleTurnSample(user_input=i["question"],
-                                  response=response,
-                                  reference=i["ground_truth"],
-                                  ref_score=ref_score)
-        for i in data for ref_score, response in i["answers"].items()
-    ])
+    # data = data[:1]
+
+    eval_samples = []
+    for i in tqdm(data, desc="Processing: "):
+        reference_claims = asyncio.run(fc.decompose_claims(i["ground_truth"], []))
+        for ref_score, response in i["answers"].items():
+            response_claims = asyncio.run(fc.decompose_claims(response, []))
+
+            eval_samples.append(
+                AnnotatedSingleTurnSample(
+                    user_input=i["question"],
+                    response=response,
+                    reference=i["ground_truth"],
+                    ref_score=ref_score,
+                    reference_claims=reference_claims,
+                    response_claims=response_claims
+                ))
+
+    eval_dataset = AnnotatedDataset(samples=eval_samples)
 
     results = evaluate(eval_dataset, metrics=[new_fc, fc])
 
@@ -140,19 +244,26 @@ if __name__ == "__main__":
 
         # factual correctness
         score = float(trace.scores["factual_correctness"])
-        nli_statements = [
+        precision_statements = [
             StatementEval(statement=s.statement, reason=s.reason, verdict=s.verdict)
-            for s in trace["factual_correctness"]["n_l_i_statement_prompt"]["output"].statements
+            for s in trace["factual_correctness"]["precision_eval"]["output"].statements
         ]
 
-        claims = trace["factual_correctness"]["claim_decomposition_prompt"]["output"].claims
+        recall_statements = [
+            StatementEval(statement=s.statement, reason=s.reason, verdict=s.verdict)
+            for s in trace["factual_correctness"]["recall_eval"]["output"].statements
+        ]
 
-        factual_correctness_eval = FactualCorrectnessEval(score=score, claims=claims, statement_evals=nli_statements)
+        claims = trace["factual_correctness"]["claim_decomposition_prompt"]["output"]["claims"]
+
+        factual_correctness_eval = FactualCorrectnessEval(
+            score=score, claims=claims, precision_statements=precision_statements, recall_statements=recall_statements
+        )
 
         # alt factual correctness
         alt_score = float(trace.scores["alt_factual_correctness"])
-        reference_claims = trace["alt_factual_correctness"]["reference_claim_decomposition_prompt"]["output"].claims
-        answer_claims = trace["alt_factual_correctness"]["response_claim_decomposition_prompt"]["output"].claims
+        reference_claims = trace["alt_factual_correctness"]["reference_claim_decomposition_prompt"]["output"]["claims"]
+        answer_claims = trace["alt_factual_correctness"]["response_claim_decomposition_prompt"]["output"]["claims"]
 
         precision_pairs = trace["alt_factual_correctness"]["precision_eval"]["input"]
         precision_classification = trace["alt_factual_correctness"]["precision_eval"]["output"]["classification"]
@@ -191,5 +302,5 @@ if __name__ == "__main__":
             )
         )
 
-    with open("./assessment.json", "w", encoding="utf-8") as f:
+    with open("./assessment-2.json", "w", encoding="utf-8") as f:
         f.write(assessment_dataset.model_dump_json(indent=4))
